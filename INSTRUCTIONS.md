@@ -38,6 +38,7 @@ cp agentmem/agent_memory.py        examples/robomme/subgoal_prediction/agent_mem
 cp agentmem/detector_refine.py     examples/robomme/subgoal_prediction/detector_refine.py
 cp agentmem/plan_parse.py          examples/robomme/subgoal_prediction/plan_parse.py
 cp agentmem/progress_state.py      examples/robomme/subgoal_prediction/progress_state.py
+cp agentmem/scene_graph.py         examples/robomme/subgoal_prediction/scene_graph.py   # optional reader, AGENTMEM_SG=1
 
 # 2. the evaluation harness we launch with (episode ranges / lists on top of upstream eval.py)
 cp run_subset_eval.py examples/robomme/run_subset_eval.py
@@ -169,6 +170,7 @@ half its episodes between runs.
 | `AGENTMEM_REVERT=0` | the stale-request revert (`AGENTMEM_STALE` sets its patience, 150) |
 | `AGENTMEM_REFINE=0` / `=1` | selective refinement → none / every verb |
 | `AGENTMEM_VERBS=contact`, `AGENTMEM_LOCGUARD=1` | two post-hoc guards, both measured nulls; off in the table |
+| `AGENTMEM_SG=1` | adds the scene-graph reader (`agentmem/scene_graph.py`, also copied next to `agent_memory.py`): the relation *cube on a white highlight disc* recorded as an event and used to answer "the highlighted cube" — PickHighlight 8/13 vs 3/13 in the first live test; not in the reported table |
 
 ## 6. Things that bit us
 

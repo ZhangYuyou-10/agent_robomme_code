@@ -442,6 +442,12 @@ class AgentMemorySubgoalPredictor(DetectorRefinedQwenVLSubgoalPredictor):
         super().start_episode(epstate, env_runner)
         self.mem.plan(self.task_goal)
         self.mem.plan_cycle(self.task_goal)
+        # EXPLORATION (2026-09-17), opt-in: a scene-graph tool that records pixel-verified
+        # relations the detector cannot ground (a cube on a white highlight disc) as events.
+        self.graph = None
+        if os.environ.get("AGENTMEM_SG", "0") == "1":
+            from subgoal_prediction.scene_graph import HighlightGraph
+            self.graph = HighlightGraph()
         if os.environ.get("AGENTMEM_DEMO", "1") == "1":
             # the demonstration is every buffered frame but the last (the first live one)
             self.mem.observe_demo(list(epstate.image_buffer[:-1]), self.refiner._boxes,
@@ -461,6 +467,10 @@ class AgentMemorySubgoalPredictor(DetectorRefinedQwenVLSubgoalPredictor):
 
     def step(self, epstate: EpisodeState) -> None:
         super().step(epstate)
+        if getattr(self, "graph", None) is not None and epstate.image_buffer:
+            self.graph.observe(epstate.image_buffer[-1])
+            if epstate.count % 3 == 0:
+                self.graph.mark_picked(epstate.image_buffer[-1])
         if self.mem.path and epstate.image_buffer:
             # The predictor is only asked every subgoal_keep_period (16) steps, and a reached cue
             # confirmed one call late is a wrong-button touch on a fail-fast task (v6: the filled
@@ -501,6 +511,13 @@ class AgentMemorySubgoalPredictor(DetectorRefinedQwenVLSubgoalPredictor):
 
         if os.environ.get("AGENTMEM_VIDEO2", "0") == "1":
             filled = self.mem.fill_demo_reference(response)
+            if filled is not None:
+                if filled != response:
+                    _log_pair(self, count, response, refined=filled)
+                return filled, has_api_error
+        if getattr(self, "graph", None) is not None:
+            # a relation the graph recorded answers the reference; the fill is final (pixel-exact)
+            filled = self.graph.fill(response)
             if filled is not None:
                 if filled != response:
                     _log_pair(self, count, response, refined=filled)
