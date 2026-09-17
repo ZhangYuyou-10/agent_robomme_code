@@ -1,0 +1,11 @@
+# Only the method itself is tracked. Everything below stays local.
+eval/
+analysis/
+docs/
+scripts/
+
+__pycache__/
+*.pyc
+*.bak
+runs/
+*.jsonl
