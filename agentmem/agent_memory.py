@@ -257,8 +257,25 @@ class AgentMemory:
             return
         goal = task_goal.strip()
 
+        # Ablation switches (all opt-in, default = the reported behaviour):
+        #   AGENTMEM_VOTE=1        one canonical wrapping instead of the three-width majority
+        #   AGENTMEM_POLICY=rules  keyword rule instead of the agent: watch the colour-cube phrases
+        #                          the goal names (all three if none), source=video iff the goal
+        #                          mentions a video/demonstration
+        #   AGENTMEM_POLICY=all    always take notes on all three colour cubes (write gate off)
+        mode = os.environ.get("AGENTMEM_POLICY", "agent")
+        if mode in ("rules", "all"):
+            g = goal.lower()
+            found = [f"{c} cube" for c in ("red", "green", "blue") if re.search(rf"\b{c} cubes?\b", g)]
+            self.watch = found if (mode == "rules" and found) else ["red cube", "green cube", "blue cube"]
+            self.need = True
+            self.source = "video" if re.search(r"\bvideo|demonstrat", g) else "live"
+            print(f"{self.tag} policy={mode}: watching {self.watch} in the "
+                  f"{'demonstration' if self.source == 'video' else 'live frames'}", flush=True)
+            return
+        widths = (0,) if os.environ.get("AGENTMEM_VOTE", "3") == "1" else self.WIDTHS
         votes, phrases, seen, srcs = 0, [], 0, []
-        for width in self.WIDTHS:
+        for width in widths:
             try:
                 take, w, need, src = self._ask_plan(goal, width)
             except Exception as e:
@@ -323,7 +340,7 @@ class AgentMemory:
         for phrase in self.watch:
             if phrase in self.notes:
                 continue
-            if self._colour_of(phrase) is None:
+            if self._colour_of(phrase) is None and os.environ.get("AGENTMEM_COLOURRULE", "1") == "1":
                 # A note the pixels cannot verify is a note the detector can fake: on PickHighlight
                 # ('cubes highlighted with white areas') the earliest confident 'highlighted cube'
                 # box is any cube, taken before the highlight exists, and the read then lands
@@ -397,9 +414,11 @@ class AgentMemory:
         idx = list(range(0, n, max(1, stride)))
         if idx[-1] != n - 1:
             idx.append(n - 1)
-        state = {p: dict(note=None, gone=None) for p in self.watch if self._colour_of(p) is not None}
+        colour_rule = os.environ.get("AGENTMEM_COLOURRULE", "1") == "1"      # ablation: "0" notes colourless phrases
+        state = {p: dict(note=None, gone=None) for p in self.watch
+                 if self._colour_of(p) is not None or not colour_rule}
         for p in self.watch:
-            if self._colour_of(p) is None:
+            if self._colour_of(p) is None and colour_rule:
                 print(f"{self.tag} demo: no colour to verify {p!r}: not noted", flush=True)
         if not state:
             return
@@ -430,7 +449,8 @@ class AgentMemory:
             if st["note"] is None:
                 continue
             note = st["note"]
-            if st["gone"] is not None:
+            # ablation: AGENTMEM_DEMOFOLLOW=0 keeps the earliest sighting and never follows the cover
+            if st["gone"] is not None and os.environ.get("AGENTMEM_DEMOFOLLOW", "1") == "1":
                 try:
                     cen, _ = boxes_fn(frames[st["gone"]], cover_phrase)
                 except Exception:
@@ -1067,9 +1087,50 @@ class AgentMemory:
                       f"withholding the note until it advances", flush=True)
                 self._stale_logged = True
             return None
-        hit = self.resolve(subgoal)
+        rmode = os.environ.get("AGENTMEM_RETRIEVAL", "structural")   # ablations: loose | agent
+        if rmode == "loose":
+            hit = self._resolve_loose(subgoal)
+        elif rmode == "agent":
+            hit = self._resolve_agent(subgoal)
+        else:
+            hit = self.resolve(subgoal)
         if hit:
             print(f"{self.tag} step is identified by {hit!r} -- reading the note", flush=True)
+        return hit
+
+    def _resolve_loose(self, subgoal: str) -> Optional[str]:
+        """Ablation rung: the first note whose words appear in the subgoal, with neither the
+        head-noun nor the modifier-position test."""
+        if not self.notes or not subgoal:
+            return None
+        text = subgoal.lower()
+        for phrase in self.notes:
+            toks = phrase.lower().split()[-2:]
+            if all(t in text for t in toks):
+                return phrase
+        return None
+
+    def _resolve_agent(self, subgoal: str) -> Optional[str]:
+        """Ablation rung: ask the agent per subgoal whether the step relates to a note. Cached
+        on the coordinate-free subgoal, so one call per distinct request."""
+        if not self.notes or not subgoal:
+            return None
+        key = phase_key(subgoal)
+        if key in self._consulted:
+            return self._consulted[key]
+        keys = "\n".join(f"- {p}" for p in self.notes)
+        try:
+            ans = self._ask(CONSULT_PROMPT.format(subgoal=subgoal, keys=keys), max_tokens=24).lower()
+        except Exception as e:
+            print(f"{self.tag} consult query failed: {e!r}", flush=True)
+            ans = ""
+        hit = None
+        if "none" not in ans[:12]:
+            for p in self.notes:
+                if p.lower() in ans or all(t in ans for t in p.lower().split()[-2:]):
+                    hit = p
+                    break
+        self._consulted[key] = hit
         return hit
 
     def cover_phrase(self, frame=None, boxes_fn=None, near=None,
