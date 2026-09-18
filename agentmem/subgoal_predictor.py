@@ -453,12 +453,34 @@ class AgentMemorySubgoalPredictor(DetectorRefinedQwenVLSubgoalPredictor):
             self.mem.observe_demo(list(epstate.image_buffer[:-1]), self.refiner._boxes,
                                   threshold=float(os.environ.get("WRITEMEM_TH", "0.30")),
                                   cover_phrase=PROMPT_CONTAINER)
+        if os.environ.get("AGENTMEM_DUMP_DEMO") and len(epstate.image_buffer) > 1:
+            # EXPLORATION: save the demonstration frames the predictor is handed, so parsers can be
+            # iterated offline (per-episode run dirs are cleaned by the harness)
+            try:
+                d = os.environ["AGENTMEM_DUMP_DEMO"]; os.makedirs(d, exist_ok=True)
+                np.savez_compressed(os.path.join(d, f"{self.env_name}_ep{self.episode_id}.npz"),
+                                    frames=np.stack([np.asarray(f)[..., :3] for f in epstate.image_buffer[:-1]]).astype(np.uint8),
+                                    goal=np.array(self.task_goal))
+            except Exception as e:
+                print(f"[agentmem] demo dump failed: {e!r}", flush=True)
         if os.environ.get("AGENTMEM_VIDEO2", "0") == "1" and len(epstate.image_buffer) > 1:
             # references the live scene cannot resolve ('the correct cube/target'): from the demo.
             # Written whenever a demonstration exists -- the planner's live/video call flips on
             # these prompts (identical blocks ARE visible live; which one was lifted is not) --
             # and read only when the VLM's own subgoal makes a demonstration reference.
             self.mem.observe_demo_objects(list(epstate.image_buffer[:-1]), self.task_goal)
+            if self.graph is not None and "pick" in (self.task_goal or "").lower():
+                # EXPLORATION: the demonstration read as events (a lifted slot, pairs of slots
+                # swapped) answers "the block that was previously picked up" by the target's slot
+                # after the events, instead of following one blob through the crossings
+                from subgoal_prediction.scene_graph import DemoEventReader
+                rd = DemoEventReader()
+                got = rd.read(list(epstate.image_buffer[:-1]))
+                if got is not None:
+                    colour, y, x, how = got
+                    self.mem.notes["correct cube"] = (float(y), float(x))
+                    print(f"[agentmem] graph: demonstration events {rd.events} ({how}); "
+                          f"the picked cube is the {colour} one at ({int(y)}, {int(x)})", flush=True)
         if os.environ.get("AGENTMEM_PATH", "0") == "1" and self.mem.source == "video":
             # the demonstration may be a ROUTE to retrace (an ordered memory, not a fact); it is
             # only used when the VLM's own subgoal carries a route slot
