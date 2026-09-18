@@ -445,7 +445,11 @@ class AgentMemorySubgoalPredictor(DetectorRefinedQwenVLSubgoalPredictor):
         # EXPLORATION (2026-09-17), opt-in: a scene-graph tool that records pixel-verified
         # relations the detector cannot ground (a cube on a white highlight disc) as events.
         self.graph = None
-        if os.environ.get("AGENTMEM_SG", "0") == "1":
+        sg_mode = os.environ.get("AGENTMEM_SG", "0")
+        kinds = getattr(self.mem, "kinds", []) if sg_mode == "agent" else []
+        if sg_mode == "1" or "mark" in kinds:
+            # "1": every reader on, gated by keywords below (the exploration runs);
+            # "agent": only the readers the agent's plan chose (mark / handled / sequence)
             from subgoal_prediction.scene_graph import HighlightGraph
             self.graph = HighlightGraph()
         if os.environ.get("AGENTMEM_DEMO", "1") == "1":
@@ -469,7 +473,8 @@ class AgentMemorySubgoalPredictor(DetectorRefinedQwenVLSubgoalPredictor):
             # these prompts (identical blocks ARE visible live; which one was lifted is not) --
             # and read only when the VLM's own subgoal makes a demonstration reference.
             self.mem.observe_demo_objects(list(epstate.image_buffer[:-1]), self.task_goal)
-            if self.graph is not None and "pick" in (self.task_goal or "").lower():
+            if (sg_mode == "1" and self.graph is not None and "pick" in (self.task_goal or "").lower()) \
+                    or "handled" in kinds:
                 # EXPLORATION: the demonstration read as events (a lifted slot, pairs of slots
                 # swapped) answers "the block that was previously picked up" by the target's slot
                 # after the events, instead of following one blob through the crossings
@@ -481,7 +486,8 @@ class AgentMemorySubgoalPredictor(DetectorRefinedQwenVLSubgoalPredictor):
                     self.mem.notes["correct cube"] = (float(y), float(x))
                     print(f"[agentmem] graph: demonstration events {rd.events} ({how}); "
                           f"the picked cube is the {colour} one at ({int(y)}, {int(x)})", flush=True)
-            if self.graph is not None and "button was pressed" in (self.task_goal or "").lower():
+            if (sg_mode == "1" and self.graph is not None and "button was pressed" in (self.task_goal or "").lower()) \
+                    or "sequence" in kinds:
                 # EXPLORATION: a temporal reference ("the target right after the button was
                 # pressed") answered from the demonstration's event order: placed, pressed, placed
                 from subgoal_prediction.scene_graph import PlaceEventReader

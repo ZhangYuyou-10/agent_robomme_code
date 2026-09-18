@@ -110,6 +110,31 @@ Answer none if the robot is simply acting on a recorded object itself, or if the
 memory at all. Otherwise answer with just the recorded object's phrase."""
 
 
+# EXPLORATION (2026-09-18), opt-in AGENTMEM_SG=agent: after the plan, a separate question asks, for
+# each thing the agent named, how the task description picks it out; each answer selects one
+# scene-graph reader (scene_graph.py). Offline on 16 prompts x 5 wordings (campaign/sg/
+# route_study_v4.py) -- see the review log for the counts. A separate call, not an appended
+# line: appended, the question flipped the plan's own SOURCE decision on two tasks.
+ROUTE_PROMPT = """A robot must carry out this task, seeing only its camera image at each moment:
+
+"{goal}"
+
+It will record where these things are before they can no longer be told apart:
+{items}
+
+For each one, say how the task description picks it out from things that look the same, choosing
+one word: appearance -- by its own colour or shape; mark -- by a temporary mark on or around it,
+such as a highlighted patch or a flash; handled -- as the one that was handled (picked up, moved)
+in the demonstration; sequence -- by when it was used in the demonstration: first or second, or
+just before or just after something else happened, such as a button press. A thing described by
+an event or by its order is sequence even if it also has a colour.
+   Write one line per thing: HOW: <thing> = appearance    or    = mark    or    = handled    or    = sequence
+
+Answer with those lines and nothing else."""
+
+HOW_LINE = re.compile(r"how\s*:\s*([^=\n]*?)\s*=\s*(appearance|mark|handled|sequence)", re.I)
+
+
 _COORD_IN_TEXT = re.compile(r"\s*at\s*<\s*\d+\s*,\s*\d+\s*>")
 
 
@@ -147,6 +172,7 @@ class AgentMemory:
         self.watch: List[str] = []
         self.need = False
         self.source = ""
+        self.kinds: List[str] = []          # AGENTMEM_SG=agent: reader kinds the agent chose
         self._consulted: Dict[str, Optional[str]] = {}
         self._cover: Optional[str] = None
         self.cycle: List[str] = []          # repeated actions, from the goal
@@ -243,6 +269,32 @@ class AgentMemory:
         return (need and bool(w)), w, need, src
 
     def plan(self, task_goal: str) -> None:
+        self._plan(task_goal)
+        if os.environ.get("AGENTMEM_SG", "0") == "agent" and task_goal:
+            try:
+                self.kinds = self._route(task_goal.strip())
+            except Exception as e:
+                print(f"{self.tag} route failed: {e!r}", flush=True)
+
+    def _route(self, goal: str) -> List[str]:
+        """EXPLORATION (2026-09-18), opt-in AGENTMEM_SG=agent. After the plan, the agent says for each
+        thing it named how the task description picks it out -- appearance / mark / handled /
+        sequence -- and the predictor turns on one scene-graph reader per kind. A separate call,
+        so the plan's own decisions are untouched. Three widths; a kind is chosen when at least
+        two readings name it. Three more text-only calls per episode."""
+        items = "\n".join(f"- {w}" for w in self.watch) if self.watch else \
+            "- whatever the robot must pick out from things that look the same"
+        kinds: List[str] = []
+        for width in self.WIDTHS:
+            text = self._rewrap(ROUTE_PROMPT, width).replace("{goal}", goal).replace("{items}", items)
+            ans = self._ask(text, max_tokens=120)
+            kinds.extend(sorted({b.lower() for _, b in HOW_LINE.findall(ans)}))
+        cnt = collections.Counter(kinds)
+        chosen = sorted(k for k, c in cnt.items() if c >= 2 and k != "appearance")
+        print(f"{self.tag} readers chosen by the agent: {chosen or 'none'}  (kinds per reading {kinds})", flush=True)
+        return chosen
+
+    def _plan(self, task_goal: str) -> None:
         """Decide, from the prompt alone, whether to take notes and about what.
 
         Asked once, the answer turns out to depend on where the question's lines happen to break:

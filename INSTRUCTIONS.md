@@ -170,7 +170,8 @@ half its episodes between runs.
 | `AGENTMEM_REVERT=0` | the stale-request revert (`AGENTMEM_STALE` sets its patience, 150) |
 | `AGENTMEM_REFINE=0` / `=1` | selective refinement → none / every verb |
 | `AGENTMEM_VERBS=contact`, `AGENTMEM_LOCGUARD=1` | two post-hoc guards, both measured nulls; off in the table |
-| `AGENTMEM_SG=1` | adds the scene-graph reader (`agentmem/scene_graph.py`, also copied next to `agent_memory.py`): the relation *cube on a white highlight disc* recorded as an event and used to answer "the highlighted cube" — PickHighlight 8/13 vs 3/13 in the first live test; not in the reported table |
+| `AGENTMEM_SG=1` | adds the scene-graph readers (`agentmem/scene_graph.py`, also copied next to `agent_memory.py`), switched on by keyword tests on the prompt: the relation *cube on a white highlight disc* recorded as an event and used to answer "the highlighted cube" (PickHighlight 30/50 vs 11/50, p = 0.0002), the demonstration read as events for "the block that was previously picked up" (VideoRepick) and "the target right after/before the button was pressed" (VideoPlaceButton); not in the reported table |
+| `AGENTMEM_SG=agent` | the same readers, but chosen by the write-time agent: a separate call after the plan asks, for each WATCH item, how the task description picks the thing out (appearance / mark / handled / sequence) and each answer maps to one reader (three more text calls per episode; the plan's own decisions are untouched — appended to the plan prompt the question flipped SOURCE on two tasks). Offline routing accuracy: see the review log (`campaign/sg/route_study_v4.py`) |
 
 ## 6. Things that bit us
 
