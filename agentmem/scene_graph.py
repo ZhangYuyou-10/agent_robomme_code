@@ -164,7 +164,10 @@ class HighlightGraph:
         highlighted cube of the colour the composer names, else any not-yet-picked one. The
         coordinate is replaced; if the composer named a colour that was never highlighted, the
         colour word is corrected too, because the pixels verified the recorded cube's colour."""
-        if not subgoal or "highlight" not in subgoal.lower() or not self.highlighted:
+        if not subgoal or not self.highlighted:
+            return None
+        from subgoal_prediction import read_gate
+        if not read_gate.asks(subgoal, ("cube",), "highlight" in subgoal.lower()):
             return None
         left = [h for h in self.highlighted if not h["picked"]]
         if not left:

@@ -39,6 +39,7 @@ cp agentmem/detector_refine.py     examples/robomme/subgoal_prediction/detector_
 cp agentmem/plan_parse.py          examples/robomme/subgoal_prediction/plan_parse.py
 cp agentmem/progress_state.py      examples/robomme/subgoal_prediction/progress_state.py
 cp agentmem/scene_graph.py         examples/robomme/subgoal_prediction/scene_graph.py   # optional reader, AGENTMEM_SG=1
+cp agentmem/read_gate.py          examples/robomme/subgoal_prediction/read_gate.py      # the read gate, AGENTMEM_GATE
 
 # 2. the evaluation harness we launch with (episode ranges / lists on top of upstream eval.py)
 cp run_subset_eval.py examples/robomme/run_subset_eval.py
@@ -172,6 +173,7 @@ half its episodes between runs.
 | `AGENTMEM_VERBS=contact`, `AGENTMEM_LOCGUARD=1` | two post-hoc guards, both measured nulls; off in the table |
 | `AGENTMEM_SG=1` | adds the scene-graph readers (`agentmem/scene_graph.py`, also copied next to `agent_memory.py`), switched on by keyword tests on the prompt: the relation *cube on a white highlight disc* recorded as an event and used to answer "the highlighted cube" (PickHighlight 30/50 vs 11/50, p = 0.0002), the demonstration read as events for "the block that was previously picked up" (VideoRepick) and "the target right after/before the button was pressed" (VideoPlaceButton); not in the reported table |
 | `AGENTMEM_SG=agent` | the same readers, but chosen by the write-time agent: a separate call after the plan asks, for each WATCH item, how the task description picks the thing out (appearance / mark / handled / sequence) and each answer maps to one reader (three more text calls per episode; the plan's own decisions are untouched — appended to the plan prompt the question flipped SOURCE on two tasks). Run over 16 tasks x 50 episodes (seed 7): **523/800 = 65.38%** against 490/800 = 61.25% for the same seed without readers, 82 discordant episodes for the readers and 49 against, p = 0.005. The whole difference is the three reader tasks (98/150 vs 66/150); on the thirteen tasks where the agent selects no reader the run is a same-config replicate and separates by one episode (425/650 vs 424/650). PickHighlight 33/50 vs 11/50, above the keyword-gated 30/50; VideoPlaceButton stays at 24/50 because the agent calls its target a matter of appearance on the benchmark's own wording, where the keyword gate reaches 42/50. The routing question never failed to parse in 800 episodes |
+| `AGENTMEM_GATE=generic` | replaces the three literal strings that decide a memory read ("highlight", "correct cube", "correct target") with one linguistic rule in `agentmem/read_gate.py`: a subgoal reads memory when the noun phrase carrying its coordinate has a modifier that is neither an appearance nor a position attribute and its head noun is a type the store can answer for. Replayed over all 147,845 logged subgoals of the campaign the two gates read exactly the same 18,205 subgoals, zero disagreements (`campaign/sg/gate_replay2.py`, which imports this module rather than restating it). Default is the released keyword gate |
 
 ## 6. Things that bit us
 

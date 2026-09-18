@@ -809,14 +809,25 @@ class AgentMemory:
                 print(f"{self.tag} demo: {len(places)} places visited; the {k+1}. is {tuple(int(v) for v in places[k])}", flush=True)
 
     def fill_demo_reference(self, subgoal: str) -> Optional[str]:
-        """'the correct cube / target' in the VLM's subgoal refers to the demonstration: put the
-        remembered position into its coordinate slot."""
+        """A subgoal that identifies its target by the demonstration rather than by what the frame
+        shows gets the remembered position in its coordinate slot. Whether this subgoal is asking
+        is decided by read_gate: the released gate keys on the two literal references the composer
+        writes here, the opt-in generic gate on the grammar of the phrase that carries the
+        coordinate. See subgoal_prediction/read_gate.py."""
         if not subgoal:
             return None
+        from subgoal_prediction import read_gate
+        types = {k.split()[-1] for k in self.notes if k.startswith("correct ")}
+        if read_gate.mode() == "generic":
+            if not read_gate.asks(subgoal, types, False):
+                return None
+            head = read_gate.grounded_np(subgoal)[0]
+            y, x = self.notes["correct " + head]
+            return read_gate.COORD.sub(f"<{int(round(y))}, {int(round(x))}>", subgoal, count=1)
         for ref in ("correct cube", "correct target"):
-            if ref in subgoal.lower() and ref in self.notes and re.search(r"<\s*\d+\s*,\s*\d+\s*>", subgoal):
+            if read_gate.asks(subgoal, types, ref in subgoal.lower() and ref in self.notes):
                 y, x = self.notes[ref]
-                return re.sub(r"<\s*\d+\s*,\s*\d+\s*>", f"<{int(round(y))}, {int(round(x))}>", subgoal, count=1)
+                return read_gate.COORD.sub(f"<{int(round(y))}, {int(round(x))}>", subgoal, count=1)
         return None
 
     def observe_path(self, frames) -> None:
