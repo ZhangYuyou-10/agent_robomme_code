@@ -295,7 +295,7 @@ class PlaceEventReader:
         W = white_blobs(fr[0])
         if len(W) < 2:
             return None
-        by, bx, ba = max(W, key=lambda w: w[3])
+        by, bx, _, ba = max(W, key=lambda w: w[3])
         targets: List[Tuple[float, float]] = []
         for y, x, rad, a in W:
             if np.hypot(y - by, x - bx) > 6 and not any(np.hypot(y - ty, x - tx) < 4 for ty, tx in targets):
