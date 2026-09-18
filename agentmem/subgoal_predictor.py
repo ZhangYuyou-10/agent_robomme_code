@@ -481,6 +481,17 @@ class AgentMemorySubgoalPredictor(DetectorRefinedQwenVLSubgoalPredictor):
                     self.mem.notes["correct cube"] = (float(y), float(x))
                     print(f"[agentmem] graph: demonstration events {rd.events} ({how}); "
                           f"the picked cube is the {colour} one at ({int(y)}, {int(x)})", flush=True)
+            if self.graph is not None and "button was pressed" in (self.task_goal or "").lower():
+                # EXPLORATION: a temporal reference ("the target right after the button was
+                # pressed") answered from the demonstration's event order: placed, pressed, placed
+                from subgoal_prediction.scene_graph import PlaceEventReader
+                rd = PlaceEventReader()
+                got = rd.read(list(epstate.image_buffer[:-1]), self.task_goal)
+                if got is not None:
+                    y, x, how = got
+                    self.mem.notes["correct target"] = (float(y), float(x))
+                    print(f"[agentmem] graph: demonstration events {rd.events} ({how}); "
+                          f"the target is at ({int(y)}, {int(x)})", flush=True)
         if os.environ.get("AGENTMEM_PATH", "0") == "1" and self.mem.source == "video":
             # the demonstration may be a ROUTE to retrace (an ordered memory, not a fact); it is
             # only used when the VLM's own subgoal carries a route slot

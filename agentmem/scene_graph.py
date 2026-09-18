@@ -260,3 +260,92 @@ class DemoEventReader:
             cur = b if cur == a else a if cur == b else cur
         c, y, x = slots[cur]
         return c, float(y), float(x), how
+
+
+class PlaceEventReader:
+    """The demonstration of 'place the cube on the target right before / after the button was
+    pressed' read as events: placed(target) from the cube's dwells, pressed from the arm dwelling
+    on the button. Nodes: the targets and the button (bright unsaturated blobs of the first frame;
+    the button is the large one, a target renders as a disc and a ring) and the cube named in the
+    goal. placed(k): the cube's track rests >= 10 frames within 3 px on a target (the demonstration
+    ends by putting the cube down off every target, which is not a placement). pressed: grey arm
+    pixels within 14 px of the button exceed the button's own base by > 60 for >= 6 frames (the
+    button itself stays visible under the gripper, so occlusion is no cue). The answer is the last
+    placement begun before the press ('before') or the first begun after it ('after'); with no
+    press seen, the first / second placement (the benchmark's demonstration is pick, place, press,
+    pick, place, put down). Abstains unless the answer lies on a target. Offline on 8 dumped
+    demonstrations: the press found once per demonstration, every answer on a target."""
+
+    def __init__(self, stride: int = 2, tag: str = "[agentmem]"):
+        self.stride = stride; self.tag = tag; self.events: List[str] = []
+
+    @staticmethod
+    def _arm(im):
+        a = np.asarray(im)[..., :3].astype(int); r, g, b = a[..., 0], a[..., 1], a[..., 2]
+        mx = np.maximum(np.maximum(r, g), b); mn = np.minimum(np.minimum(r, g), b)
+        return (mn > 60) & (mx < 200) & ((mx - mn) < 20)
+
+    def read(self, frames, goal: str) -> Optional[Tuple[float, float, str]]:
+        goal = (goal or "").lower()
+        word = "before" if "before" in goal else "after" if "after" in goal else None
+        colour = next((c for c in COLOURS if c in goal), None)
+        if frames is None or len(frames) < 4 or word is None or colour is None:
+            return None
+        fr = [frames[i] for i in range(0, len(frames), max(1, self.stride))]
+        W = white_blobs(fr[0])
+        if len(W) < 2:
+            return None
+        by, bx, ba = max(W, key=lambda w: w[3])
+        targets: List[Tuple[float, float]] = []
+        for y, x, rad, a in W:
+            if np.hypot(y - by, x - bx) > 6 and not any(np.hypot(y - ty, x - tx) < 4 for ty, tx in targets):
+                targets.append((y, x))
+        # the cube's track and its dwells
+        track = []; cur = None
+        for im in fr:
+            B = colour_blobs(im, colour)
+            if not B:
+                track.append(None); continue
+            if cur is None:
+                big = max(B, key=lambda b: b[2]); cur = (big[0], big[1])
+            else:
+                dd = [np.hypot(y - cur[0], x - cur[1]) for y, x, a in B]; j = int(np.argmin(dd))
+                if dd[j] > 30:
+                    track.append(None); continue
+                cur = (B[j][0], B[j][1])
+            track.append(cur)
+        dwells = []; run = []
+        for t, q in enumerate(track + [None]):
+            if q is not None and run and np.hypot(q[0] - run[0][1][0], q[1] - run[0][1][1]) < 3:
+                run.append((t, q)); continue
+            if len(run) >= 10:
+                c = (float(np.mean([p[1][0] for p in run])), float(np.mean([p[1][1] for p in run])))
+                if not dwells or np.hypot(c[0] - dwells[-1][1][0], c[1] - dwells[-1][1][1]) > 10:
+                    dwells.append((run[0][0], c))
+            run = [(t, q)] if q is not None else []
+        places = [(t, c) for t, c in dwells[1:] if any(np.hypot(c[0] - ty, c[1] - tx) <= 8 for ty, tx in targets)]
+        # the press: the arm dwelling on the button
+        H, Wd = np.asarray(fr[0]).shape[:2]; yy, xx = np.mgrid[0:H, 0:Wd]; near = np.hypot(yy - by, xx - bx) <= 14
+        base = int((self._arm(fr[0]) & near).sum())
+        press = None; s = None
+        for t in range(len(fr) + 1):
+            hot = t < len(fr) and int((self._arm(fr[t]) & near).sum()) - base > 60
+            if hot and s is None:
+                s = t
+            if not hot and s is not None:
+                if t - s >= 6 and press is None:
+                    press = s
+                s = None
+        self.events = [f"placed on target at {tuple(int(v) for v in c)} from frame {t * self.stride}" for t, c in places]
+        if press is not None:
+            self.events.append(f"button pressed at frame {press * self.stride}")
+            self.events.sort(key=lambda e: int(e.rsplit(" ", 1)[1]))
+            before = [c for t, c in places if t < press]; after = [c for t, c in places if t > press]
+            ans = (before[-1] if before else None) if word == "before" else (after[0] if after else None)
+            how = f"{word} the press at frame {press * self.stride}"
+        else:
+            ans = (places[0][1] if places else None) if word == "before" else (places[1][1] if len(places) > 1 else None)
+            how = f"no press seen; the {'first' if word == 'before' else 'second'} placement"
+        if ans is None:
+            return None
+        return float(ans[0]), float(ans[1]), how
