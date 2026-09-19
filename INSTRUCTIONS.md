@@ -112,7 +112,7 @@ python run_subset_eval.py \
 ```
 
 The environment variables above are the reported configuration; set nothing else. For the
-stronger arm with the scene-graph readers, which is one extra variable, see section 3b. `only_tasks`
+stronger arm, with the scene-graph readers and the general read gate, see section 3b. `only_tasks`
 takes any subset of the sixteen (`BinFill, PickXtimes, SwingXtimes, StopCube, VideoUnmask,
 ButtonUnmask, VideoUnmaskSwap, ButtonUnmaskSwap, PickHighlight, VideoRepick, VideoPlaceButton,
 VideoPlaceOrder, MoveCube, InsertPeg, PatternLock, RouteStick`). To shard a task across
@@ -131,22 +131,23 @@ Per-episode wall-clock (median, one evaluator among ten on a shared box): most t
 VideoRepick 6, VideoPlaceOrder 8, VideoPlaceButton 9, InsertPeg 32 (cap-length episodes). The
 full 16 × 50 table is roughly 75 evaluator-hours.
 
-## 3b. Run the newest configuration: with the scene-graph readers
+## 3b. Run the newest configuration: scene-graph readers and one read gate
 
 This is the strongest deployable arm and the one to run if you want the best numbers. It is the
-command above with **one variable added**:
+command above with **two variables added**:
 
 ```
-AGENTMEM_SG=agent \
+AGENTMEM_SG=agent AGENTMEM_GATE=generic \
 ```
 
-so the full line becomes:
+The first lets the write-time agent choose a scene-graph reader. The second replaces the three
+literal strings that decided a memory read with one linguistic rule. The full command:
 
 ```
 WRITEMEM_TH=0.30 \
 AGENTMEM_KW=1 AGENTMEM_STALE=150 AGENTMEM_CYCLE=0 AGENTMEM_DEMO=1 AGENTMEM_REVERT=1 \
 AGENTMEM_REFINE=verbs AGENTMEM_PATH=1 AGENTMEM_ORD=1 AGENTMEM_TRACK=1 AGENTMEM_VIDEO2=1 \
-AGENTMEM_SG=agent \
+AGENTMEM_SG=agent AGENTMEM_GATE=generic \
 CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 \
 python run_subset_eval.py \
   --args.model_seed=7 --args.port=8301 \
@@ -204,11 +205,33 @@ keyword-gated column.
 **Cost.** Three more text-only calls per episode (seven instead of four), all without the image.
 Wall-clock per episode is unchanged within noise.
 
-**Read gate.** `AGENTMEM_GATE` selects which rule decides that a subgoal is asking memory for a
-coordinate. The default (`keyword`) is the released behaviour. `generic` uses the one linguistic
-rule in `agentmem/read_gate.py`; offline the two read exactly the same 18,205 of 147,845 logged
-subgoals, and the live confirmation run is in progress, so leave it unset unless you are
-reproducing that check.
+**The read gate, and why `generic`.** `AGENTMEM_GATE` decides which rule answers the question
+*is this subgoal asking memory for a coordinate?* The released default, `keyword`, keys on three
+literal strings the composer happens to produce on this benchmark: `highlight`, `correct cube`,
+`correct target`. Those strings are a property of one benchmark's phrasing, not of the method.
+
+`generic` states the same decision as a rule, in `agentmem/read_gate.py`:
+
+> a subgoal reads memory when the noun phrase carrying its coordinate has a modifier that is
+> **not** an appearance or position attribute, and its head noun is a type the store can answer for.
+
+"Appearance or position attribute" is the vocabulary the module already uses elsewhere: the three
+colour words, the ordinals the repetition memory counts, and the side and distance words. The
+head-noun types are not a list in the module; each caller passes what its own store recorded. Over
+every subgoal the campaign logged, the only modifiers the composer ever produced that are neither
+colour nor position were `correct` and `highlighted`, which is why one rule covers all three cases.
+
+**What stands behind it.** Replayed over all 147,845 logged subgoals, the two gates read exactly
+the same 18,205 subgoals, zero disagreements (`campaign/sg/gate_replay2.py`, which imports the
+shipped module rather than restating it). Unit tests cover both branches of both substitution
+sites, including a store that holds nothing. A live 16 × 50 run against the same episodes is
+confirming it; at the time of writing it is part-way through and reading as a same-configuration
+replicate, with the discordant-episode rate on top of the benchmark's own 11.2% flip rate between
+identical configurations.
+
+**If you need the numbers exactly as published,** drop `AGENTMEM_GATE` and use section 3's command:
+every reported figure was produced with the keyword gate. Use `generic` for the method as it is
+stated, which is what section 3b is for.
 
 ## 4. Reading results
 
@@ -253,7 +276,7 @@ half its episodes between runs.
 | `AGENTMEM_VERBS=contact`, `AGENTMEM_LOCGUARD=1` | two post-hoc guards, both measured nulls; off in the table |
 | `AGENTMEM_SG=1` | adds the scene-graph readers (`agentmem/scene_graph.py`, also copied next to `agent_memory.py`), switched on by keyword tests on the prompt: the relation *cube on a white highlight disc* recorded as an event and used to answer "the highlighted cube" (PickHighlight 30/50 vs 11/50, p = 0.0002), the demonstration read as events for "the block that was previously picked up" (VideoRepick) and "the target right after/before the button was pressed" (VideoPlaceButton); not in the reported table |
 | `AGENTMEM_SG=agent` | the same readers, but chosen by the write-time agent: a separate call after the plan asks, for each WATCH item, how the task description picks the thing out (appearance / mark / handled / sequence) and each answer maps to one reader (three more text calls per episode; the plan's own decisions are untouched — appended to the plan prompt the question flipped SOURCE on two tasks). Run over 16 tasks x 50 episodes (seed 7): **523/800 = 65.38%** against 490/800 = 61.25% for the same seed without readers, 82 discordant episodes for the readers and 49 against, p = 0.005. The whole difference is the three reader tasks (98/150 vs 66/150); on the thirteen tasks where the agent selects no reader the run is a same-config replicate and separates by one episode (425/650 vs 424/650). PickHighlight 33/50 vs 11/50, above the keyword-gated 30/50; VideoPlaceButton stays at 24/50 because the agent calls its target a matter of appearance on the benchmark's own wording, where the keyword gate reaches 42/50. The routing question never failed to parse in 800 episodes |
-| `AGENTMEM_GATE=generic` | replaces the three literal strings that decide a memory read ("highlight", "correct cube", "correct target") with one linguistic rule in `agentmem/read_gate.py`: a subgoal reads memory when the noun phrase carrying its coordinate has a modifier that is neither an appearance nor a position attribute and its head noun is a type the store can answer for. Replayed over all 147,845 logged subgoals of the campaign the two gates read exactly the same 18,205 subgoals, zero disagreements (`campaign/sg/gate_replay2.py`, which imports this module rather than restating it). Default is the released keyword gate |
+| `AGENTMEM_GATE=generic` | replaces the three literal strings that decide a memory read ("highlight", "correct cube", "correct target") with one linguistic rule in `agentmem/read_gate.py`: a subgoal reads memory when the noun phrase carrying its coordinate has a modifier that is neither an appearance nor a position attribute and its head noun is a type the store can answer for. Replayed over all 147,845 logged subgoals of the campaign the two gates read exactly the same 18,205 subgoals, zero disagreements (`campaign/sg/gate_replay2.py`, which imports this module rather than restating it). Default is the released keyword gate; section 3b runs with `generic`, which is the method as stated. A live 16x50 confirmation run against the same episodes is in progress |
 
 ## 6. Things that bit us
 
