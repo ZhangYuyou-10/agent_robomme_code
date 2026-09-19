@@ -38,7 +38,7 @@ cp agentmem/agent_memory.py        examples/robomme/subgoal_prediction/agent_mem
 cp agentmem/detector_refine.py     examples/robomme/subgoal_prediction/detector_refine.py
 cp agentmem/plan_parse.py          examples/robomme/subgoal_prediction/plan_parse.py
 cp agentmem/progress_state.py      examples/robomme/subgoal_prediction/progress_state.py
-cp agentmem/scene_graph.py         examples/robomme/subgoal_prediction/scene_graph.py   # optional reader, AGENTMEM_SG=1
+cp agentmem/scene_graph.py         examples/robomme/subgoal_prediction/scene_graph.py   # scene-graph readers, AGENTMEM_SG (section 3b)
 cp agentmem/read_gate.py          examples/robomme/subgoal_prediction/read_gate.py      # the read gate, AGENTMEM_GATE
 
 # 2. the evaluation harness we launch with (episode ranges / lists on top of upstream eval.py)
@@ -111,7 +111,8 @@ python run_subset_eval.py \
   --args.only_tasks=ButtonUnmask,VideoUnmaskSwap --args.episodes_per_task=50 --args.max_steps=1300
 ```
 
-The environment variables above are the reported configuration; set nothing else. `only_tasks`
+The environment variables above are the reported configuration; set nothing else. For the
+stronger arm with the scene-graph readers, which is one extra variable, see section 3b. `only_tasks`
 takes any subset of the sixteen (`BinFill, PickXtimes, SwingXtimes, StopCube, VideoUnmask,
 ButtonUnmask, VideoUnmaskSwap, ButtonUnmaskSwap, PickHighlight, VideoRepick, VideoPlaceButton,
 VideoPlaceOrder, MoveCube, InsertPeg, PatternLock, RouteStick`). To shard a task across
@@ -129,6 +130,85 @@ every read (`step is identified by ... -- reading the note`), and a per-episode 
 Per-episode wall-clock (median, one evaluator among ten on a shared box): most tasks 1–5 min;
 VideoRepick 6, VideoPlaceOrder 8, VideoPlaceButton 9, InsertPeg 32 (cap-length episodes). The
 full 16 × 50 table is roughly 75 evaluator-hours.
+
+## 3b. Run the newest configuration: with the scene-graph readers
+
+This is the strongest deployable arm and the one to run if you want the best numbers. It is the
+command above with **one variable added**:
+
+```
+AGENTMEM_SG=agent \
+```
+
+so the full line becomes:
+
+```
+WRITEMEM_TH=0.30 \
+AGENTMEM_KW=1 AGENTMEM_STALE=150 AGENTMEM_CYCLE=0 AGENTMEM_DEMO=1 AGENTMEM_REVERT=1 \
+AGENTMEM_REFINE=verbs AGENTMEM_PATH=1 AGENTMEM_ORD=1 AGENTMEM_TRACK=1 AGENTMEM_VIDEO2=1 \
+AGENTMEM_SG=agent \
+CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 \
+python run_subset_eval.py \
+  --args.model_seed=7 --args.port=8301 \
+  --args.policy_name=agentmem_sg_seed7 --args.model_ckpt_id=79999 \
+  --args.subgoal_type=grounded_subgoal --args.use_agentmem --args.use_qwenvl \
+  --args.qwenvl_groundSG_adapter_path=runs/ckpts/vlm_subgoal_predictor/qwenvl/grounded_subgoal/checkpoint-1200 \
+  --args.only_tasks=PickHighlight,VideoRepick --args.episodes_per_task=50 --args.max_steps=1300
+```
+
+Nothing else changes: same policy server, same adapter, same episodes, same other variables.
+Copy `agentmem/scene_graph.py` and `agentmem/read_gate.py` next to `agent_memory.py` first
+(section 1) or the import fails at episode start.
+
+**What the added variable does.** After the write-time plan, a second text-only question asks, for
+each phrase the plan named, how the task description picks it out from things that look the same:
+*appearance*, *mark*, *handled* or *sequence*. Each answer selects one reader over the scene graph
+— the live relation reader for a temporary mark, the demonstration-event reader for an object that
+was handled, the placement reader for an ordering. *appearance* selects nothing. The question is a
+separate call, so the plan's own decisions are untouched; asked as part of the plan prompt it
+flipped the live-or-demonstration decision on two tasks.
+
+**What you should see on stdout.** One line per episode naming the choice, then the reader's own
+records:
+
+```
+[agentmem] readers chosen by the agent: ['mark']  (kinds per reading ['mark', 'mark', 'mark'])
+[agentmem] graph: blue cube on a white disc at (106, 112), frame 11
+[agentmem] readers chosen by the agent: none
+[agentmem] graph: demonstration events [...]; the picked cube is the green one at (88, 141)
+```
+
+`none` on a task that needs no reader is the expected output, not a failure: the agent selects no
+reader on thirteen of the sixteen tasks, on every episode.
+
+**What it scores.** Sixteen tasks × 50 episodes, seed 7, against the same episodes without the
+readers: **523/800 = 65.38%** against 490/800 = 61.25%, 82 discordant episodes for the readers and
+49 against (exact McNemar, p = 0.005). The whole difference is three tasks:
+
+| task | without readers | agent-routed | keyword-gated (`AGENTMEM_SG=1`) |
+|---|---|---|---|
+| PickHighlight | 11/50 | **33/50** | 30/50 |
+| VideoRepick | 33/50 | 41/50 | 42/50 |
+| VideoPlaceButton | 22/50 | 24/50 | 42/50 |
+
+On the thirteen tasks where the agent selects no reader the run is a same-config replicate and
+separates by one episode (425/650 against 424/650), so the routing costs nothing where it does
+nothing.
+
+**The one known miss.** On VideoPlaceButton the agent calls the target a matter of appearance on
+the benchmark's own wording, so no reader runs and the cell stays at reference level.
+`AGENTMEM_SG=1` switches the same readers on by keyword tests on the prompt instead of by the
+agent and reaches 42/50 there. Use `agent` for the method as claimed; use `1` only to reproduce the
+keyword-gated column.
+
+**Cost.** Three more text-only calls per episode (seven instead of four), all without the image.
+Wall-clock per episode is unchanged within noise.
+
+**Read gate.** `AGENTMEM_GATE` selects which rule decides that a subgoal is asking memory for a
+coordinate. The default (`keyword`) is the released behaviour. `generic` uses the one linguistic
+rule in `agentmem/read_gate.py`; offline the two read exactly the same 18,205 of 147,845 logged
+subgoals, and the live confirmation run is in progress, so leave it unset unless you are
+reproducing that check.
 
 ## 4. Reading results
 
